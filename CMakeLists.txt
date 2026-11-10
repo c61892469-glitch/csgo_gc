@@ -1,62 +1,99 @@
-cmake_minimum_required(VERSION 3.20)
-
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "macOS deployment target")
-
 project(csgo_gc)
 
-set(CMAKE_CXX_STANDARD 20)
+find_package(MbedTLS CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(libwebsockets CONFIG REQUIRED)
 
-if (CMAKE_SIZEOF_VOID_P EQUAL 4)
-    set(IS_32BIT ON)
-endif()
+# funchook and its deps get pulled in via FetchContent
+# FIXME: consider alternatives!!! funchook is no longer
+# maintained, and our hooks won't work reliably on x86_64
+# macOS when using it
+include(FetchContent)
+set(FETCHCONTENT_QUIET FALSE)
 
-# shouldn't need this
-set(CMAKE_SKIP_RPATH TRUE)
+option(FUNCHOOK_BUILD_SHARED "build shared library" OFF)
+option(FUNCHOOK_BUILD_TESTS "Build tests" OFF)
+option(FUNCHOOK_INSTALL "Install Funchook" OFF)
 
-if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    if (IS_32BIT)
-        set(GC_LIB_DIR ".")
-        set(GC_EXE_SUFFIX "_osx")
-    else()
-        set(GC_LIB_DIR "osx64")
-        set(GC_EXE_SUFFIX "_osx64")
-    endif()
-elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    if (IS_32BIT)
-        set(GC_LIB_DIR ".")
-        set(GC_EXE_SUFFIX "_linux")
-    else()
-        set(GC_LIB_DIR "linux64")
-        set(GC_LIB_SUFFIX "_client")
-        set(GC_EXE_SUFFIX "_linux64")
-    endif()
-elseif (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    if (IS_32BIT)
-        set(GC_LIB_DIR ".")
-    else()
-        set(GC_LIB_DIR "x64")
-        set(GC_EXE_SUFFIX "_win64")
-    endif()
+FetchContent_Declare(funchook
+	GIT_REPOSITORY https://github.com/kubo/funchook
+	GIT_SHALLOW TRUE)
+
+FetchContent_MakeAvailable(funchook)
+
+add_library(csgo_gc STATIC
+    appid.cpp
+    case_opening.cpp
+    config.cpp
+    gc_client.cpp
+    gc_message.cpp
+    gc_server.cpp
+    gc_shared.cpp
+    graffiti.cpp
+    inventory.cpp
+    inventory_editor.cpp
+    inventory_modify.cpp
+    item.cpp
+    item_schema.cpp
+    keyvalue.cpp
+    main.cpp
+    message.cpp
+    networking_client.cpp
+    networking_server.cpp
+    random.cpp
+    steam_callbacks.cpp
+    steam_hook.cpp
+    steamgamecoordinatorproxy.cpp
+    steamgameserverproxy.cpp
+    steammatchmakingserversproxy.cpp
+    steampipecontext.cpp
+    steamuserproxy.cpp
+    steamuserstatsproxy.cpp
+    steamutilsproxy.cpp)
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_sources(csgo_gc PRIVATE platform_windows.cpp)
 else()
-    message(FATAL_ERROR "Unsupported system $[CMAKE_SYSTEM_NAME}")
+    target_sources(csgo_gc PRIVATE platform_unix.cpp)
 endif()
+
+target_precompile_headers(csgo_gc PRIVATE stdafx.h)
+
+set_target_properties(csgo_gc PROPERTIES PREFIX "")
 
 if (MSVC)
-    # statically linked crt
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    add_compile_options(/MP)
-
-    # disable exceptions to avoid coroutine related crashes in old builds
-    string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    add_compile_definitions(_HAS_EXCEPTIONS=0)
+    target_compile_options(csgo_gc PRIVATE /W4 /wd4244)
+    target_compile_definitions(csgo_gc PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
-    add_compile_options(-fpic -fvisibility=hidden)
-
-    if (NOT APPLE)
-        add_link_options(-Wl,--no-undefined -z noexecstack)
-    endif()
+    target_compile_options(csgo_gc PRIVATE -Wall -Wextra)
 endif()
 
-add_subdirectory(csgo_gc)
-add_subdirectory(launcher)
-add_subdirectory(steamworks)
+set(PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../protobufs)
+file(GLOB PROTOS ${PROTO_DIR}/*.proto)
+set(PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
+target_include_directories(csgo_gc PRIVATE ${PROTOC_OUT_DIR})
+
+# bruhhhhhh
+file(MAKE_DIRECTORY ${PROTOC_OUT_DIR})
+
+protobuf_generate(
+    TARGET csgo_gc
+    PROTOS ${PROTOS}
+    IMPORT_DIRS ${PROTO_DIR}
+    PROTOC_OUT_DIR ${PROTOC_OUT_DIR})
+
+source_group("Protobufs" REGULAR_EXPRESSION "\\.pb\\.(cc|h)$")
+
+target_link_libraries(csgo_gc PRIVATE
+    MbedTLS::mbedcrypto
+    protobuf::libprotobuf-lite
+    funchook-static
+    steam_api
+    websockets)
+
+# apple message box
+if (APPLE)
+    target_link_libraries(csgo_gc PRIVATE "-framework Foundation")
+endif()
+

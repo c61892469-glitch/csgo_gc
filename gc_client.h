@@ -1,0 +1,100 @@
+#pragma once
+
+#include "gc_const.h"
+#include "gc_shared.h"
+#include "inventory.h"
+
+class GCMessageRead;
+
+class CMsgClientWelcome;
+class CMsgCStrike15Welcome;
+class CMsgGCCStrike15_v2_MatchmakingGC2ClientHello;
+
+struct AuthTicket
+{
+    uint64_t steamId{}; // gameserver
+    std::vector<uint8_t> buffer;
+};
+
+class ClientGC final : public SharedGC
+{
+public:
+    ClientGC(uint64_t steamId);
+    ~ClientGC();
+
+private:
+    void HandleEvent(GCEvent type, uint64_t id, std::vector<uint8_t> &&buffer) override;
+
+    // event handlers
+    void HandleMessage(uint32_t type, const void *data, uint32_t size);
+    void HandleNetMessage(uint64_t steamId, const void *data, uint32_t size);
+    void SetAuthTicket(uint32_t handle, std::vector<uint8_t> &&buffer);
+    void ClearAuthTicket(uint32_t handle);
+    void HandleConnect(uint64_t steamId, GCMessageRead &message);
+    void HandleSOCacheRequest();
+    void InventoryUpdate();
+
+    // send to either the local game or the game server we're connected to
+    void SendMessageToGame(bool server, uint32_t type,
+        const google::protobuf::MessageLite &message, uint64_t jobId = JobIdInvalid);
+
+    void SendSOCacheMessages(const SOCacheMessages &messages, bool server);
+    void SendInventoryChangeMessages(const InventoryChangeMessages &messages);
+
+    void OnClientHello(GCMessageRead &messageRead);
+    void OnMatchmakingHello();
+    void OnRequestInventoryRefresh();
+    // FIX: handle the client's periodic cache version check. Without this
+    // the Feb 2018 Scaleform client may leave the inventory tab grey
+    // because it never gets a confirmation for its cached SO version.
+    void OnSOCacheSubscriptionCheck(GCMessageRead &messageRead);
+    void AdjustItemEquippedState(GCMessageRead &messageRead);
+    void ClientPlayerDecalSign(GCMessageRead &messageRead);
+    void UseItemRequest(GCMessageRead &messageRead);
+    void ClientRequestJoinServerData(GCMessageRead &messageRead);
+    void SetItemPositions(GCMessageRead &messageRead);
+    void IncrementKillCountAttribute(GCMessageRead &messageRead);
+    void ApplySticker(GCMessageRead &messageRead);
+    void StoreGetUserData(GCMessageRead &messageRead);
+    void StorePurchaseInit(GCMessageRead &messageRead);
+    void StorePurchaseFinalize(GCMessageRead &messageRead);
+    void StorePurchaseFinalizeStruct(GCMessageRead &messageRead);
+    void OnGetEventFavorites(GCMessageRead &messageRead);
+    void OnPartyRegister(GCMessageRead &messageRead);
+
+    void DeleteItem(GCMessageRead &messageRead);
+    void UnlockCrate(GCMessageRead &messageRead);
+    void NameItem(GCMessageRead &messageRead);
+    void NameBaseItem(GCMessageRead &messageRead);
+    void RemoveItemName(GCMessageRead &messageRead);
+
+    void ProcessCasketItemLoadContents(GCMessageRead &messageRead);
+    void ProcessCasketItemAdd(GCMessageRead &messageRead);
+    void ProcessCasketItemExtract(GCMessageRead &messageRead);
+
+    void BuildMatchmakingHello(CMsgGCCStrike15_v2_MatchmakingGC2ClientHello &message);
+    void BuildClientWelcome(CMsgClientWelcome &message, const CMsgCStrike15Welcome &csWelcome,
+        const CMsgGCCStrike15_v2_MatchmakingGC2ClientHello &matchmakingHello);
+    void SendRankUpdate();
+
+    uint32_t AccountId() const { return m_steamId & 0xffffffff; }
+
+    const uint64_t m_steamId;
+
+    Inventory m_inventory;
+
+    uint64_t m_serverSteamId{};
+    std::unordered_map<uint32_t, AuthTicket> m_tickets;
+
+    // FIX: build number reported by the client in CMsgClientHello.version.
+    // This is the *real* Steam build (e.g. 13627 for 1.36.2.7), unlike
+    // AppId::GetClientVersion() which parses "1.36.2.7" as just "1" because
+    // std::from_chars stops at the first '.'.
+    // Used as required_appid_version so the client does not show
+    // "please update your game" and leave the inventory tab grey.
+    uint32_t m_clientBuildVersion{};
+
+    // microtransactions, we only have one going at a time
+    uint64_t m_transactionId{};
+    std::vector<uint64_t> m_transactionItemIds;
+};
